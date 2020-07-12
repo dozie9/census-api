@@ -1,3 +1,5 @@
+import decimal
+
 from flask import (
     Flask,
     abort,
@@ -28,7 +30,7 @@ import re
 import shutil
 import tempfile
 import zipfile
-from .validation import (
+from census_extractomatic.validation import (
     qwarg_validate,
     Bool,
     ClientRequestValidationException,
@@ -204,23 +206,23 @@ def get_from_cache(cache_key, try_s3=True):
     # Try memcache first
     cached = g.cache.get(cache_key)
 
-    if not cached and try_s3 and current_app.s3 is not None:
-        # Try S3 next
-        try:
-            k = current_app.s3.get_object(
-                Bucket='embed.censusreporter.org',
-                Key=cache_key,
-            )
-            cached = k['Body'].read()
-        except botocore.exceptions.ClientError as e:
-            if e.response['Error']['Code'] == 'NoSuchKey':
-                # Key doesn't exist, so return null
-                return None
-            else:
-                # Something else happened, so re-raise
-                raise
-
-        # TODO Should stick the S3 thing back in memcache
+    # if not cached and try_s3 and current_app.s3 is not None:
+    #     # Try S3 next
+    #     try:
+    #         k = current_app.s3.get_object(
+    #             Bucket='embed.censusreporter.org',
+    #             Key=cache_key,
+    #         )
+    #         cached = k['Body'].read()
+    #     except botocore.exceptions.ClientError as e:
+    #         if e.response['Error']['Code'] == 'NoSuchKey':
+    #             # Key doesn't exist, so return null
+    #             return None
+    #         else:
+    #             # Something else happened, so re-raise
+    #             raise
+    #
+    #     # TODO Should stick the S3 thing back in memcache
 
     return cached
 
@@ -229,13 +231,13 @@ def put_in_cache(cache_key, value, memcache=True, try_s3=True, content_type='app
     if memcache:
         g.cache.set(cache_key, value)
 
-    if try_s3 and current_app.s3 is not None:
-        current_app.s3.put_object(
-            Bucket='embed.censusreporter.org',
-            Key=cache_key,
-            ContentType=content_type,
-            Body=value,
-        )
+    # if try_s3 and current_app.s3 is not None:
+    #     current_app.s3.put_object(
+    #         Bucket='embed.censusreporter.org',
+    #         Key=cache_key,
+    #         ContentType=content_type,
+    #         Body=value,
+    #     )
 
 
 def crossdomain(origin=None, methods=None, headers=None,
@@ -255,7 +257,7 @@ def crossdomain(origin=None, methods=None, headers=None,
             return methods
 
         options_resp = current_app.make_default_options_response()
-        return options_resp.headers['allow']
+        return options_resp.headers.get('allow')
 
     def decorator(f):
         def wrapped_function(*args, **kwargs):
@@ -634,6 +636,11 @@ def geo_tiles(release, sumlevel, zoom, x, y):
     return resp
 
 
+def decimal_default(obj):
+    if isinstance(obj, decimal.Decimal):
+        return float(obj)
+    raise TypeError
+
 # Example: /1.0/geo/tiger2014/04000US53
 # Example: /1.0/geo/tiger2013/04000US53
 @app.route("/1.0/geo/<release>/<geoid>")
@@ -649,7 +656,7 @@ def geo_lookup(release, geoid):
         abort(404, 'Invalid GeoID')
 
     cache_key = str('1.0/geo/%s/show/%s.json?geom=%s' % (release, geoid, request.qwargs.geom))
-    cached = get_from_cache(cache_key)
+    cached = None #get_from_cache(cache_key)
     if cached:
         resp = make_response(cached)
     else:
@@ -681,7 +688,7 @@ def geo_lookup(release, geoid):
         if geom:
             geom = json.loads(geom)
 
-        result = json.dumps(dict(type="Feature", properties=result, geometry=geom), separators=(',', ':'))
+        result = json.dumps(dict(type="Feature", properties=result, geometry=geom), default=decimal_default, separators=(',', ':'))
 
         resp = make_response(result)
         put_in_cache(cache_key, result)
@@ -1089,7 +1096,7 @@ def table_details(table_id):
         abort(404, "Invalid table ID")
 
     cache_key = str('tables/%s/%s.json' % (release, table_id))
-    cached = get_from_cache(cache_key)
+    cached = None
     if cached:
         resp = make_response(cached)
     else:
@@ -1135,7 +1142,7 @@ def table_details(table_id):
         result = json.dumps(data)
 
         resp = make_response(result)
-        put_in_cache(cache_key, result)
+        # put_in_cache(cache_key, result)
 
     resp.headers.set('Content-Type', 'application/json')
     resp.headers.set('Cache-Control', 'public,max-age=%d' % int(3600 * 4))
